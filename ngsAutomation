@@ -1,0 +1,140 @@
+#!/bin/bash
+
+# =============================================================================
+# Script: ngsAutomation.sh
+# Description: Automate alignment, conversion, sorting, indexing, and verification
+# =============================================================================
+
+# ----- Configuration -----
+
+# Set the number of threads for parallel processing
+THREADS=10
+
+# Define base directory (home directory)
+BASE_DIR="/home/bebek"
+
+# Paths based on the provided directory structure
+DATA_DIR="$BASE_DIR/data"
+INDEX_DIR="$BASE_DIR/index"
+OUTPUT_DIR="$BASE_DIR/results"
+LOGS_DIR="$OUTPUT_DIR/logs"
+SAM_DIR="$OUTPUT_DIR/sam"
+BAM_DIR="$OUTPUT_DIR/bam"
+SORTED_BAM_DIR="$OUTPUT_DIR/sorted_bam"
+
+# HISAT2 Index Prefix
+HISAT2_INDEX="$INDEX_DIR/ncbi_index"
+
+# Create output directories if they don't exist
+mkdir -p "$LOGS_DIR" "$SAM_DIR" "$BAM_DIR" "$SORTED_BAM_DIR"
+
+# ----- Functions -----
+
+# Function to process a single sample
+process_sample() {
+local sample=$1
+
+echo "Processing sample: $sample"
+
+# Define file paths
+local R1="$DATA_DIR/${sample}_R1.fastq"
+local R2="$DATA_DIR/${sample}_R2.fastq"
+local SAM_FILE="$SAM_DIR/${sample}_aligned.sam"
+local ALIGN_LOG_FILE="$LOGS_DIR/${sample}_aligned.log"
+local BAM_FILE="$BAM_DIR/${sample}.bam"
+local SORTED_BAM_FILE="$SORTED_BAM_DIR/${sample}_sorted.bam"
+local BAM_INDEX="$SORTED_BAM_FILE.bai"
+
+# ----- Step 1: Alignment with HISAT2 -----
+echo "[$sample] Starting HISAT2 alignment..."
+hisat2 -p "$THREADS" --dta --rna-strandness FR --very-sensitive \
+-x "$HISAT2_INDEX" \
+-1 "$R1" -2 "$R2" \
+-S "$SAM_FILE" 2> "$ALIGN_LOG_FILE"
+
+# Check if HISAT2 ran successfully
+if [ $? -ne 0 ]; then
+echo "[$sample] HISAT2 alignment failed. Check $ALIGN_LOG_FILE for details."
+return 1
+fi
+echo "[$sample] HISAT2 alignment completed."
+
+# ----- Step 2: Convert SAM to BAM -----
+echo "[$sample] Converting SAM to BAM..."
+samtools view -bS "$SAM_FILE" -o "$BAM_FILE"
+
+if [ $? -ne 0 ]; then
+echo "[$sample] SAM to BAM conversion failed."
+return 1
+fi
+echo "[$sample] SAM to BAM conversion completed."
+
+# ----- Step 3: Sort BAM -----
+echo "[$sample] Sorting BAM file..."
+samtools sort "$BAM_FILE" -o "$SORTED_BAM_FILE"
+
+if [ $? -ne 0 ]; then
+echo "[$sample] Sorting BAM failed."
+return 1
+fi
+echo "[$sample] Sorting completed."
+
+# ----- Step 4: Index Sorted BAM -----
+echo "[$sample] Indexing sorted BAM..."
+samtools index "$SORTED_BAM_FILE"
+
+if [ $? -ne 0 ]; then
+echo "[$sample] Indexing sorted BAM failed."
+return 1
+fi
+echo "[$sample] Indexing completed."
+
+# ----- Step 5: Verify Sorted BAM -----
+echo "[$sample] Verifying sorted BAM..."
+samtools quickcheck -v "$SORTED_BAM_FILE"
+
+if [ $? -ne 0 ]; then
+echo "[$sample] Verification of sorted BAM failed."
+return 1
+fi
+echo "[$sample] Verification successful."
+
+# ----- Optional: Cleanup Intermediate Files -----
+echo "[$sample] Cleaning up intermediate files..."
+rm "$SAM_FILE" "$BAM_FILE"
+
+if [ $? -ne 0 ]; then
+echo "[$sample] Cleanup failed."
+return 1
+fi
+echo "[$sample] Cleanup completed."
+
+echo "[$sample] Processing finished successfully."
+echo "----------------------------------------"
+}
+
+# ----- Main Script -----
+
+# Iterate over each pair of FASTQ files
+for R1_FILE in "$DATA_DIR"/*_R1.fastq; do
+# Extract sample name by removing the directory and suffix
+SAMPLE_NAME=$(basename "$R1_FILE" _R1.fastq)
+
+# Check if corresponding R2 file exists
+R2_FILE="$DATA_DIR/${SAMPLE_NAME}_R2.fastq"
+if [[ ! -f "$R2_FILE" ]]; then
+echo "Warning: Pair file for $SAMPLE_NAME not found. Skipping."
+continue
+fi
+
+# Process the sample
+process_sample "$SAMPLE_NAME"
+
+# Check if the sample was processed successfully
+if [ $? -ne 0 ]; then
+echo "Error processing sample $SAMPLE_NAME. Exiting."
+exit 1
+fi
+done
+
+echo "All samples processed successfully."
