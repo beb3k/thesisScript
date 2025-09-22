@@ -1,0 +1,198 @@
+# Load necessary libraries
+library(DESeq2)
+library(ggplot2)
+library(pheatmap)
+library(RColorBrewer)
+library(ggrepel)
+library(EnhancedVolcano)
+library(clusterProfiler)
+library(org.Hs.eg.db) # Human annotation package
+library(enrichplot)
+library(dplyr)
+library(tibble)
+library(openxlsx)
+library(writexl)
+library(KEGGREST)
+library(ReactomePA)
+library(UpSetR)
+library(plotrix)
+library(forcats)
+library(ggridges)
+library(AnnotationDbi)
+
+# Set working directory
+setwd("F:/TranscriptomicData/")
+
+# Import count data
+counts <- read.csv("gene_counts_fixed.csv", header = TRUE, row.names = 1)
+dim(counts) # Check dimensions of count data
+head(counts) # Inspect the first few rows
+
+# Import sample information
+sample_info <- read.csv("sample_info.csv", header = TRUE)
+dim(sample_info)
+head(sample_info) # Inspect the first few rows
+
+# Prepare count matrix for DESeq2
+count_matrix <- counts[, 6:ncol(counts)] # gene counts start from column 6
+colnames(count_matrix) <- sub(".bam$", "", colnames(counts)[6:ncol(counts)]) # Remove ".bam" suffix from sample names
+dim(count_matrix)
+head(count_matrix)
+
+# Verify that sample names in count_matrix and sample name in sample_info match
+all(colnames(count_matrix) == sample_info$sample)
+all.equal(colnames(count_matrix), sample_info$sample)
+
+################################################
+################################################
+# Differential Gene Expression (DGE) Analysis ##
+################################################
+################################################
+
+##########################
+# Construct DESeqDataSet #
+##########################
+
+# Create DESeqDataSet object
+dds <- DESeqDataSetFromMatrix(countData = count_matrix,
+                              colData = sample_info,
+                              design = ~ condition) # Design formula: condition as the independent variable
+
+#################
+# Pre-filtering #
+#################
+
+# Keep genes with at least 10 total counts
+keep <- rowSums(counts(dds)) >= 10
+dds <- dds[keep, ]
+
+# Inspect the number of genes retained after pre-filtering
+dim(dds)
+
+#############
+#Run DESeq  #
+#############
+
+# Run differential expression analysis
+dds <- DESeq(dds)
+
+# Examine results
+resultsNames(dds) # Show available contrasts
+
+# Extract results for Gallic Acid vs Control
+res_gallic <- results(dds, name = "condition_gallic_acid_vs_control")
+summary(res_gallic) # Summarize results
+
+# Extract results for Leaf Extract vs Control
+res_leaf <- results(dds, name = "condition_leaf_extract_vs_control")
+summary(res_leaf) # Summarize results
+
+# Combine the results
+res_gallic$gene <- rownames(res_gallic)
+res_leaf$gene <- rownames(res_leaf)
+res_gallic$treatment <- "Asam Galat"
+res_leaf$treatment <- "Ekstrak daun M. foetida"
+combined_res <- rbind(res_gallic, res_leaf)
+
+# Remove rows where pvalue is NA
+combined_res <- combined_res[!is.na(combined_res$pvalue), ]
+
+# Count unique values in the 'gene' column
+gene_counts <- table(combined_res$gene)
+unique_gene_count <- length(unique(combined_res$gene))
+
+# Print the results
+print(paste("Number of unique genes:", unique_gene_count))
+
+#--------------------------------------------------------------------------------------------------------------------
+# Separate upregulated and downregulated genes for Gallic Acid vs Control (excluding p-value)
+#--------------------------------------------------------------------------------------------------------------------
+
+# Filter for Gallic Acid results
+res_gallic_filtered <- subset(combined_res, treatment == "Asam Galat")
+
+# Extract upregulated genes (log2FC >= 1)
+upregulated_gallic <- subset(res_gallic_filtered, log2FoldChange >= 1)
+print(paste("Number of upregulated genes (Gallic Acid):", nrow(upregulated_gallic)))
+head(upregulated_gallic)
+
+# Extract downregulated genes (log2FC <= -1)
+downregulated_gallic <- subset(res_gallic_filtered, log2FoldChange <= -1)
+print(paste("Number of downregulated genes (Gallic Acid):", nrow(downregulated_gallic)))
+head(downregulated_gallic)
+
+#--------------------------------------------------------------------------------------------------------------------
+# Optional: Extract significant genes for Leaf Extract vs Control (for comparison)
+#--------------------------------------------------------------------------------------------------------------------
+
+# Filter for Leaf Extract results
+res_leaf_filtered <- subset(combined_res, treatment == "Ekstrak daun M. foetida")
+
+# Extract upregulated genes (log2FC >= 1)
+upregulated_leaf <- subset(res_leaf_filtered, log2FoldChange >= 1)
+print(paste("Number of upregulated genes (Leaf Extract):", nrow(upregulated_leaf)))
+head(upregulated_leaf)
+
+# Extract downregulated genes (log2FC <= -1)
+downregulated_leaf <- subset(res_leaf_filtered, log2FoldChange <= -1)
+print(paste("Number of downregulated genes (Leaf Extract):", nrow(downregulated_leaf)))
+head(downregulated_leaf)
+
+#--------------------------------------------------------------------------------------------------------------------
+# Volcano Plot
+#--------------------------------------------------------------------------------------------------------------------
+
+# Create volcano plot for Gallic Acid vs Control
+volcano_gallic <- EnhancedVolcano(combined_res[combined_res$treatment == "Asam Galat", ],
+                                  lab = combined_res[combined_res$treatment == "Asam Galat", ]$gene,
+                                  x = 'log2FoldChange',
+                                  y = 'pvalue',
+                                  title = 'Volcano Plot - Gallic Acid vs Control',
+                                  pCutoff = 0.01, # You can adjust this p-value cutoff
+                                  FCcutoff = 1, # You can adjust this log2FC cutoff
+                                  pointSize = 2.0,
+                                  labSize = 3.0,
+                                  colAlpha = 0.8,
+                                  legendPosition = 'right',
+                                  legendLabSize = 10,
+                                  legendIconSize = 3.0)
+print(volcano_gallic)
+
+# Create volcano plot for Leaf Extract vs Control
+volcano_leaf <- EnhancedVolcano(combined_res[combined_res$treatment == "Ekstrak daun M. foetida", ],
+                                lab = combined_res[combined_res$treatment == "Ekstrak daun M. foetida", ]$gene,
+                                x = 'log2FoldChange',
+                                y = 'pvalue',
+                                title = 'Volcano Plot - Leaf Extract vs Control',
+                                pCutoff = 0.01, # You can adjust this p-value cutoff
+                                FCcutoff = 1, # You can adjust this log2FC cutoff
+                                pointSize = 2.0,
+                                labSize = 3.0,
+                                colAlpha = 0.8,
+                                legendPosition = 'right',
+                                legendLabSize = 10,
+                                legendIconSize = 3.0)
+print(volcano_leaf)
+
+#--------------------------------------------------------------------------------------------------------------------
+# Heatmap
+#--------------------------------------------------------------------------------------------------------------------
+
+# Get normalized counts from DESeq2 object
+normalized_counts <- counts(dds, normalized = TRUE)
+
+# Select top 50 most variable genes (for heatmap)
+rv <- rowVars(normalized_counts)
+select <- order(rv, decreasing = TRUE)[seq_len(min(50, length(rv)))]
+heatmap_data <- normalized_counts[select,]
+
+# Create heatmap
+heatmap_plot <- pheatmap(heatmap_data,
+                         scale = "row", # Scale by row (genes)
+                         show_rownames = TRUE,
+                         show_colnames = TRUE,
+                         cluster_rows = TRUE,
+                         cluster_cols = TRUE,
+                         main = "Heatmap 50 Gen Teratas",
+                         color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdBu")))(100))
+print(heatmap_plot)
